@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<title>Secure Telegram Sender</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0;height:100vh;display:flex;justify-content:center;align-items:center;background:linear-gradient(135deg,#0088cc,#00c6ff);font-family:Segoe UI,sans-serif;}
+.lock{background:#fff;width:330px;padding:28px 24px;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,.25);text-align:center;}
+.lock h2{color:#0088cc;margin-bottom:15px;}
+.lock .pass-wrap{position:relative;}
+.lock input{width:90%;padding:14px;border-radius:12px;border:1px solid #ccc;font-size:16px;outline:none;}
+.lock input:focus{border-color:#0088cc;box-shadow:0 0 0 2px rgba(0,136,204,.15);}
+.lock button{margin-top:18px;width:100%;padding:13px;border:none;border-radius:12px;background:#0088cc;color:#fff;font-size:16px;cursor:pointer;}
+.lock button:disabled{background:#aaa;cursor:not-allowed;}
+.error{color:#e74c3c;margin-top:10px;font-size:14px;}
+.timer{color:#ff4d4d;margin-top:10px;font-weight:bold;}
+.phone{display:none;background:#fff;width:360px;padding:20px;border-radius:20px;box-shadow:0 15px 30px rgba(0,0,0,.2);flex-direction:column;gap:12px;}
+.phone h2{text-align:center;color:#0088cc;}
+textarea,input[type=file]{padding:10px;border-radius:10px;border:1px solid #ccc;}
+textarea{resize:none;height:80px;}
+.file{display:flex;align-items:center;gap:10px;background:#f4f6f8;padding:8px 10px;border-radius:10px;font-size:13px;}
+.icon{font-size:18px;}
+.name{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.size{color:#666;font-size:12px;}
+.remove{background:#ff4d4d;border:none;color:#fff;padding:4px 7px;border-radius:6px;cursor:pointer;}
+.send{background:#0088cc;color:#fff;padding:12px;border:none;border-radius:12px;font-size:16px;}
+.status{text-align:center;font-size:14px;}
+</style>
+</head>
+<body>
+
+<div class="lock" id="lockBox">
+  <h2>🔐 Enter Password</h2>
+  <div class="pass-wrap">
+    <input type="password" id="pass" placeholder="Enter password">
+  </div>
+  <button id="unlockBtn" onclick="checkPass()">Unlock</button>
+  <div class="error" id="err"></div>
+  <div class="timer" id="timer"></div>
+</div>
+
+<div class="phone" id="app">
+  <h2>📤 Telegram Secure Send</h2>
+  <textarea id="message" placeholder="Write message..."></textarea>
+  <input type="file" multiple id="files" onchange="handleFiles()">
+  <div id="preview"></div>
+  <button class="send" onclick="send()">Send</button>
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+/* ===== CONFIG ===== */
+// লক্ষ্য করুন: এখানে কোনো টোকেন নেই। এটি নিরাপদ।
+const PASSWORD_HASH = "380c5066683adca7eaefa4f6f3f071aa2275b6f22528b5af74e66c6c0140ea0d"; 
+/* ================== */
+
+let files=[];
+let wrongCount = 0;
+let lockCount = Number(localStorage.getItem("lockCount")) || 0;
+let lockUntil = Number(localStorage.getItem("lockUntil")) || 0;
+let interval;
+
+/* 🔔 Telegram Alert (নিরাপদ উপায়) */
+async function sendAlert(text){
+  const fd = new FormData();
+  fd.append("type", "message");
+  fd.append("text", `🚨 Password Alert\n${text}\nTime: ${new Date().toLocaleString()}\nDevice: ${navigator.userAgent}`);
+  
+  // আমাদের তৈরি করা গোপন api তে পাঠাবে
+  await fetch('/api/send', { method: "POST", body: fd });
+}
+
+async function sha256(t){
+  const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+
+async function checkPass(){
+  if(Date.now() < lockUntil) return;
+  const h = await sha256(pass.value);
+  if(h === PASSWORD_HASH){
+    localStorage.removeItem("lockUntil");
+    lockBox.style.display="none";
+    app.style.display="flex";
+  }else{
+    wrongCount++;
+    err.textContent="❌ Wrong password";
+    sendAlert("Wrong password attempt");
+    if(wrongCount >= 3){
+      startTimer();
+      wrongCount = 0;
+    }
+  }
+}
+
+function startTimer(){
+  lockCount++;
+  localStorage.setItem("lockCount", lockCount);
+  let minutes = lockCount <= 5 ? lockCount : 10;
+  lockUntil = Date.now() + minutes * 60 * 1000;
+  localStorage.setItem("lockUntil", lockUntil);
+  sendAlert(`Timer activated (${minutes} minute lock)`);
+  unlockBtn.style.display="none";
+  err.textContent="";
+  runTimer();
+}
+
+function runTimer(){
+  clearInterval(interval);
+  interval = setInterval(()=>{
+    const remain = lockUntil - Date.now();
+    if(remain <= 0){
+      clearInterval(interval);
+      unlockBtn.style.display="block";
+      timer.textContent="";
+      localStorage.removeItem("lockUntil");
+      return;
+    }
+    const m = Math.floor(remain/60000);
+    const s = Math.floor((remain%60000)/1000);
+    timer.textContent = `⏳ Try again in ${m}:${s.toString().padStart(2,"0")}`;
+  },1000);
+}
+
+if(Date.now() < lockUntil){
+  unlockBtn.style.display="none";
+  runTimer();
+}
+
+const filesInput=document.getElementById("files");
+function handleFiles(){
+  for(const f of filesInput.files) files.push(f);
+  filesInput.value="";
+  render();
+}
+
+function formatSize(bytes){
+  if(bytes<1024) return bytes+" B";
+  if(bytes<1024*1024) return (bytes/1024).toFixed(1)+" KB";
+  if(bytes<1024*1024*1024) return (bytes/1024/1024).toFixed(2)+" MB";
+  return (bytes/1024/1024/1024).toFixed(2)+" GB";
+}
+
+function render(){
+  preview.innerHTML="";
+  files.forEach((f,i)=>{
+    let name=f.name.length>22 ? "…"+f.name.slice(-19) : f.name;
+    preview.innerHTML+=`
+      <div class="file">
+        <div class="name">${name}</div>
+        <div class="size">${formatSize(f.size)}</div>
+        <button class="remove" onclick="removeFile(${i})">✕</button>
+      </div>`;
+  });
+}
+
+function removeFile(i){ files.splice(i,1); render(); }
+
+/* Send Function (নিরাপদ উপায়) */
+async function send(){
+  status.textContent="Sending...";
+  try{
+    if(message.value.trim()){
+      const fd = new FormData();
+      fd.append("type", "message");
+      fd.append("text", message.value);
+      await fetch('/api/send', { method:"POST", body: fd });
+    }
+    for(const f of files){
+      const fd = new FormData();
+      fd.append("type", "document");
+      fd.append("document", f);
+      await fetch('/api/send', { method:"POST", body: fd });
+    }
+    status.textContent="✅ Done";
+    files=[]; render(); message.value="";
+  }catch(e){
+    console.error(e);
+    status.textContent="❌ Failed";
+  }
+}
+</script>
+</body>
+</html>
